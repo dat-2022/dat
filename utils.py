@@ -2,6 +2,7 @@ import math
 import os
 import torch
 
+#Source code from https://github.com/a1600012888/YOPO-You-Only-Propagate-Once
 
 def torch_accuracy(output, target, topk=(1,)):
 

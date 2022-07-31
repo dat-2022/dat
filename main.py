@@ -1,7 +1,5 @@
 import torch
 import torch.distributed as dist
-import time
-import numpy as np
 import argparse
 from tqdm import tqdm
 import os
@@ -10,14 +8,14 @@ from quantization import RandomQuantizer
 from attack import PGD
 from torch.autograd import Variable
 from dataset import Cifar, Cifar_EXT, ImageNet
-from models import PreActResNet18, ResNet50
-from utils import save_checkpoint, load_checkpoint, torch_accuracy, AvgMeter
+from models import PreActResNet18
+from utils import save_checkpoint, torch_accuracy, AvgMeter
 from torchvision.models import resnet50
 from lamb import Lamb
 
 
 parser = argparse.ArgumentParser(description='distributed adversarial training')
-parser.add_argument('--dataset', default='cifar', choices=['cifar', 'imagenet'],
+parser.add_argument('--dataset', default='cifar', choices=['cifar', 'cifarext', 'imagenet'],
                     help='dataset cifar or imagenet')
 parser.add_argument('--world-size', default=-1, type=int,
                     help='number of nodes for distributed training')
@@ -66,8 +64,8 @@ def distributed(param, rank, size):
 def fgsm(gradz, step_size):
     return step_size*torch.sign(gradz)
 
-global global_noise_data
-global_noise_data = torch.zeros([512, 3, 32, 32]).cuda()
+# global global_noise_data
+global_noise_data = torch.zeros([512, 3, 224, 224]).cuda()
 def train(net, data_loader, optimizer,
           criterion, DEVICE=torch.device('cuda:0'),
           descrip_str='', es = (8.0, 10), fast=False, lr_scheduler=None, warmup=False):
@@ -224,8 +222,11 @@ def main():
     eval_epochs = args.eval_epochs
     DEVICE = torch.device('cuda:0')
     criterion = torch.nn.CrossEntropyLoss().to(DEVICE)
+    global global_noise_data
+    if args.dataset == 'cifar' or args.dataset == 'cifarext':
 
-    if args.dataset == 'cifar':
+        global_noise_data = torch.zeros([batch_size, 3, 32, 32]).cuda()
+
         net = PreActResNet18()
         net = torch.nn.DataParallel(net).to(DEVICE)
 
@@ -235,14 +236,15 @@ def main():
             optimizer = Lamb(net.parameters(), lr=args.lr, weight_decay=1e-4, betas=(.9, .999), adam=False)
         lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones = [75, 90, 95], gamma = 0.1)
 
-        ds_train, ds_val, sp_train = Cifar_EXT.get_loader(batch_size, args.world_size, args.rank, args.dataset_path)
+        if args.dataset == 'cifar':
+            ds_train, ds_val, sp_train = Cifar.get_loader(batch_size, args.world_size, args.rank, args.dataset_path)
+        else:
+            ds_train, ds_val, sp_train = Cifar_EXT.get_loader(batch_size, args.world_size, args.rank, args.dataset_path)
         es =(8.0, 10)
 
-        # lr_steps = num_epochs * len(ds_train)
-        # lr_scheduler = torch.optim.lr_scheduler.CyclicLR(optimizer, cycle_momentum=False, base_lr=0, max_lr=args.lr,
-        #                                                  step_size_up=lr_steps / 2, step_size_down=lr_steps / 2)
-
     elif args.dataset == 'imagenet':
+        global_noise_data = torch.zeros([batch_size, 3, 224, 224]).cuda()
+
         net = resnet50()
         net = torch.nn.DataParallel(net).to(DEVICE)
 
@@ -250,7 +252,7 @@ def main():
             optimizer = torch.optim.SGD(net.parameters(), lr=args.lr, momentum=0.9, weight_decay=1e-4)
         else:
             optimizer = Lamb(net.parameters(), lr=args.lr, weight_decay=1e-4, betas=(.9, .999), adam=False)
-        lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[20, 30, 40], gamma=0.1)
+        lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[20, 25, 28], gamma=0.1)
 
         ds_train, ds_val, sp_train = ImageNet.get_loader(batch_size, args.world_size, args.rank, args.dataset_path)
         es = (2.0, 4)
